@@ -1,0 +1,8 @@
+# gitleaks config for ubicloud-rs (release-prep, project-release step 2).
+# Default rules, no allowlists: a full-history scan on 2026-10-19 found no
+# leaks. Add path-scoped [[allowlists]] only for proven upstream-doc
+# placeholders, as hetzner-rs does.
+title = "ubicloud-rs"
+
+[extend]
+useDefault = true

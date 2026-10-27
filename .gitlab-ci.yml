@@ -1,0 +1,12 @@
+# Verification only. OpenAPI regeneration runs standalone via scripts/regen on
+# a host systemd timer (see contrib/systemd), not on GitLab CI minutes.
+stages:
+  - verify
+
+rust:
+  stage: verify
+  image: rust:1.88
+  script:
+    - cargo fmt --all -- --check
+    - cargo clippy --all-targets --all-features -- -D warnings
+    - TEST_SKIP_LOG="$CI_PROJECT_DIR/test-skip.log" cargo test --all-targets

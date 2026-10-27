@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1040" height="270" viewBox="0 0 1040 270" role="img" aria-labelledby="title description">
+  <title id="title">ubicloud-rs mock VM creation</title>
+  <desc id="description">A local mock request returns a decoded virtual machine.</desc>
+  <rect width="1040" height="270" rx="18" fill="#101923"/>
+  <circle cx="38" cy="38" r="7" fill="#f7768e"/><circle cx="62" cy="38" r="7" fill="#e0af68"/><circle cx="86" cy="38" r="7" fill="#9ece6a"/>
+  <text x="36" y="91" fill="#7aa2f7" font-family="monospace" font-size="19">$ cargo run --example mock_create_vm</text>
+  <text x="36" y="153" fill="#c0caf5" font-family="monospace" font-size="21">Created VM compat-check (vm123456789012345678901234) in us-east-a2: running</text>
+  <text x="36" y="218" fill="#9ece6a" font-family="monospace" font-size="16">mock server · recorded fixture · no cloud calls</text>
+</svg>

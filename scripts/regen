@@ -1,0 +1,202 @@
+#!/usr/bin/env bash
+# Standalone OpenAPI regeneration for ubicloud-rs (no CI runner required).
+#
+# Fetches the upstream Ubicloud spec, compares it with the vendored SHA-256 in
+# Cargo.toml, regenerates the client with the pinned Progenitor, runs
+# fmt/clippy/test, selects the release with cargo-semver-checks (minor for
+# additive changes, major for breaking ones, patch when the generated client is
+# unchanged), then commits to the release branch, tags
+# v<semver>+api.<upstream revision> and pushes both.
+#
+# usage: scripts/regen [--dry-run]
+#   --dry-run  do everything except commit, tag and push; regenerated files
+#              are left in the working tree for inspection
+#
+# Environment (all optional):
+#   REGEN_REMOTE        git remote to fetch from and push to (default: origin)
+#   REGEN_BRANCH        release branch (default: main)
+#   UPSTREAM_GIT        upstream repository (default: ubicloud/ubicloud on GitHub)
+#   SEMVER_CHECKS_ROOT  install root for the pinned cargo-semver-checks
+#   GITLAB_TOKEN        when set and glab is installed, failures open an issue
+#   GITLAB_PROJECT      project for that issue (default: davidawad/ubicloud-rs)
+#   RUSTFMT, PROGENITOR, PROGENITOR_ROOT are passed to scripts/generate-client.sh
+set -Eeuo pipefail
+
+dry_run=0
+case "${1:-}" in
+    '') ;;
+    --dry-run) dry_run=1 ;;
+    -h | --help)
+        sed -n '2,/^set -Eeuo/{/^set -Eeuo/d;s/^# \{0,1\}//;p}' "$0"
+        exit 0
+        ;;
+    *)
+        printf 'regen: unknown argument %s (try --help)\n' "$1" >&2
+        exit 2
+        ;;
+esac
+
+repo_root="$(git -C "$(dirname "${BASH_SOURCE[0]}")" rev-parse --show-toplevel)"
+cd "$repo_root"
+
+remote="${REGEN_REMOTE:-origin}"
+branch="${REGEN_BRANCH:-main}"
+upstream_git="${UPSTREAM_GIT:-https://github.com/ubicloud/ubicloud.git}"
+semver_checks_version='0.51.0'
+semver_checks_root="${SEMVER_CHECKS_ROOT:-${XDG_CACHE_HOME:-$HOME/.cache}/ubicloud-rs/cargo-semver-checks-$semver_checks_version}"
+spec_path='spec/openapi.yml'
+tmp_dir="$(mktemp -d)"
+current_step='starting'
+
+step() {
+    current_step="$1"
+    printf '==> %s\n' "$current_step"
+}
+
+on_exit() {
+    local status="$1"
+    trap - EXIT
+    rm -rf "$tmp_dir"
+    [[ $status -eq 0 ]] && return
+    local message="regen failed during '${current_step}' (exit ${status})"
+    printf 'regen: ERROR: %s\n' "$message" >&2
+    if [[ -n "${GITLAB_TOKEN:-}" ]] && command -v glab >/dev/null 2>&1; then
+        glab issue create --yes \
+            --repo "${GITLAB_PROJECT:-davidawad/ubicloud-rs}" \
+            --title "OpenAPI regeneration failed: ${current_step}" \
+            --description "scripts/regen on $(hostname) failed: ${message}. See the host journal for the full log." \
+            >/dev/null || printf 'regen: could not open a GitLab issue with glab\n' >&2
+    fi
+    exit "$status"
+}
+trap 'on_exit "$?"' EXIT
+
+generate() {
+    cargo run --quiet --manifest-path "$repo_root/Cargo.toml" -p generate -- "$@"
+}
+
+step 'checking the working tree'
+if [[ -n "$(git status --porcelain)" ]]; then
+    printf 'regen: the working tree has uncommitted changes\n' >&2
+    exit 1
+fi
+
+step "fetching ${remote}/${branch} and tags"
+git fetch --quiet --tags "$remote" "$branch"
+if [[ $dry_run -eq 0 ]]; then
+    if [[ "$(git symbolic-ref --quiet --short HEAD || true)" != "$branch" ]]; then
+        printf 'regen: check out %s before releasing (or use --dry-run)\n' "$branch" >&2
+        exit 1
+    fi
+    git merge --quiet --ff-only FETCH_HEAD
+fi
+
+step 'resolving the upstream revision'
+revision="$(git ls-remote "$upstream_git" refs/heads/main | awk 'NR == 1 { print $1 }')"
+if [[ ! "$revision" =~ ^[0-9a-f]{40}$ ]]; then
+    printf 'regen: cannot resolve main of %s\n' "$upstream_git" >&2
+    exit 1
+fi
+
+step "fetching the spec at ${revision}"
+# Fetching by revision keeps the recorded revision and the content consistent.
+raw_url="https://raw.githubusercontent.com/ubicloud/ubicloud/${revision}/openapi/openapi.yml"
+curl --fail --location --silent --show-error --retry 3 "$raw_url" --output "$tmp_dir/openapi.yml"
+upstream_sha="$(sha256sum "$tmp_dir/openapi.yml" | cut -d ' ' -f 1)"
+vendored_sha="$(generate spec-metadata Cargo.toml sha256)"
+if [[ "$upstream_sha" == "$vendored_sha" ]]; then
+    printf 'The vendored OpenAPI spec is current (sha256 %s).\n' "$vendored_sha"
+    exit 0
+fi
+printf 'Upstream spec changed: %s -> %s\n' "$vendored_sha" "$upstream_sha"
+
+step 'regenerating the client'
+cp "$tmp_dir/openapi.yml" "$spec_path"
+generate set-spec-metadata Cargo.toml \
+    "url=https://github.com/ubicloud/ubicloud/blob/${revision}/openapi/openapi.yml" \
+    "revision=${revision}" "sha256=${upstream_sha}"
+scripts/generate-client.sh
+
+step 'cargo fmt --check'
+cargo fmt --all -- --check
+step 'cargo clippy'
+cargo clippy --all-targets --all-features -- -D warnings
+step 'cargo test'
+skip_log="$tmp_dir/test-skip.log"
+TEST_SKIP_LOG="$skip_log" cargo test --all-targets
+if [[ -s "$skip_log" ]]; then
+    printf 'Skipped tests (%s):\n' "$(wc -l <"$skip_log")"
+    cat "$skip_log"
+fi
+step 'cargo doc'
+cargo doc --no-deps --all-features --quiet
+
+step 'selecting the release version'
+baseline_tag="$(git tag --list 'v*' | generate latest-tag)"
+if [[ -n "$baseline_tag" ]]; then
+    baseline_ref="$baseline_tag"
+    baseline_version="$(generate tag-version "$baseline_tag")"
+else
+    # No release tag yet: compare against the branch tip and its package version.
+    baseline_ref="$(git rev-parse HEAD)"
+    baseline_version="$(git show HEAD:Cargo.toml >"$tmp_dir/Cargo.toml" &&
+        generate package-version "$tmp_dir/Cargo.toml")"
+fi
+printf 'Baseline: %s (%s)\n' "$baseline_version" "$baseline_ref"
+
+if git diff --quiet -- src/generated; then
+    echo 'The generated client is unchanged; selecting a patch release.'
+    bump='patch'
+else
+    if ! command -v cargo-semver-checks >/dev/null 2>&1; then
+        if [[ ! -x "$semver_checks_root/bin/cargo-semver-checks" ]]; then
+            step "installing cargo-semver-checks ${semver_checks_version}"
+            cargo install --quiet --locked --root "$semver_checks_root" \
+                cargo-semver-checks --version "$semver_checks_version"
+        fi
+        export PATH="$semver_checks_root/bin:$PATH"
+    fi
+    step 'cargo semver-checks'
+    release_type="$(generate semver-release-type "$baseline_version")"
+    if cargo semver-checks check-release -p ubicloud-rs \
+        --baseline-rev "$baseline_ref" --release-type "$release_type"; then
+        bump='minor'
+    elif cargo semver-checks check-release -p ubicloud-rs \
+        --baseline-rev "$baseline_ref" --release-type major; then
+        echo 'cargo-semver-checks found a breaking API change; selecting a major release.'
+        bump='major'
+    else
+        printf 'regen: cargo-semver-checks could not compare against %s\n' "$baseline_ref" >&2
+        exit 1
+    fi
+fi
+
+step 'updating the package version'
+release_version="$(generate next-version "$baseline_version" "$bump")"
+tag="$(generate release-tag "$release_version" "$revision")"
+package_version="${tag#v}"
+if git rev-parse --quiet --verify "refs/tags/${tag}" >/dev/null; then
+    printf 'regen: tag %s already exists\n' "$tag" >&2
+    exit 1
+fi
+generate set-package-version Cargo.toml "$package_version"
+generate set-package-license Cargo.toml GPL-3.0-or-later
+cargo update --workspace --offline --quiet
+printf 'Release: %s (%s bump)\n' "$tag" "$bump"
+
+if [[ $dry_run -eq 1 ]]; then
+    echo 'Dry run: not committing, tagging or pushing. Regenerated files:'
+    git status --short
+    exit 0
+fi
+
+step 'committing and tagging'
+git add -- "$spec_path" Cargo.toml Cargo.lock src/generated
+git commit --quiet -m "chore(api): regenerate client for ubicloud ${revision:0:12} (dot-3qkox4.3.2)" \
+    -m "Upstream spec ${raw_url}
+SHA-256 ${upstream_sha}; ${bump} release ${tag} selected by scripts/regen."
+git tag -a "$tag" -m "ubicloud-rs ${package_version}"
+
+step "pushing ${branch} and ${tag} to ${remote}"
+git push --atomic "$remote" "HEAD:refs/heads/${branch}" "refs/tags/${tag}"
+printf 'Released %s\n' "$tag"

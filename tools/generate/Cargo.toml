@@ -1,0 +1,11 @@
+[package]
+name = "generate"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.88"
+license = "GPL-3.0-or-later"
+description = "Code-generation helpers for ubicloud-rs (spec preparation, post-generation patching, release versioning)"
+publish = false
+
+[dependencies]
+serde_yaml = "=0.9.34"

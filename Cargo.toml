@@ -1,0 +1,31 @@
+[package]
+name = "ubicloud-rs"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+license = "GPL-3.0-or-later"
+description = "Rust client for the Ubicloud API"
+repository = "https://github.com/davidawad/ubicloud-rs"
+
+[dependencies]
+reqwest = { version = "0.13", default-features = false, features = ["json", "query", "stream", "rustls"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+bytes = "1.12"
+chrono = { version = "0.4", default-features = false, features = ["serde"] }
+futures-core = "0.3"
+percent-encoding = "2.3"
+regress = "0.10"
+serde_urlencoded = "0.7"
+tokio = { version = "1.53", features = ["macros", "rt-multi-thread", "time"] }
+
+[workspace]
+members = ["tools/generate"]
+default-members = [".", "tools/generate"]
+
+[package.metadata.upstream-spec]
+url = "https://github.com/ubicloud/ubicloud/blob/00f2bfa6236d3c3a715de4ee59437cdc966f0f8f/openapi/openapi.yml"
+revision = "00f2bfa6236d3c3a715de4ee59437cdc966f0f8f"
+progenitor_revision = "23accc9f63cf3a56ac697ba92ac3d176c940dbdb"
+progenitor_version = "0.15.1"
+sha256 = "52d97f23dafe311fcb41ba5376babcad43d01ee19a83804487827e8a6818c30a"

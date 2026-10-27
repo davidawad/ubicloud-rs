@@ -1,0 +1,13 @@
+[Unit]
+Description=Regenerate ubicloud-rs from the upstream Ubicloud OpenAPI spec
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+# A dedicated clone of the repository with push access to main (SSH deploy key).
+WorkingDirectory=%h/src/ubicloud-rs
+ExecStart=%h/src/ubicloud-rs/scripts/regen
+# Optional: set GITLAB_TOKEN here (and install glab) to open an issue on failure.
+# EnvironmentFile=-%h/.config/ubicloud-rs/regen.env
+TimeoutStartSec=2h

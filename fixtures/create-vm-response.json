@@ -1,0 +1,1 @@
+{"id":"vm123456789012345678901234","name":"compat-check","location":"us-east-a2","boot_image":"ubuntu-noble","ip4":null,"ip4_enabled":true,"ip6":null,"maintenance_window_start_at":null,"size":"standard-2","state":"running","storage_size_gib":25,"unix_user":"ubuntu","firewalls":[],"private_ipv4":"10.0.0.10","private_ipv6":"fd00::10","subnet":"private-subnet-1"}
